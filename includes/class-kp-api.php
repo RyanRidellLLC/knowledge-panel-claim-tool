@@ -2,49 +2,69 @@
 
 if (!defined('ABSPATH')) exit;
 
-class KPCT_Assets {
+class KPCT_API {
+
+    private $option_name = 'kpct_api_key';
 
     public function __construct() {
-        add_action('wp_enqueue_scripts', [$this, 'maybe_enqueue_assets']);
+        add_action('wp_ajax_kpct_search', [$this, 'handle_search']);
+        add_action('wp_ajax_nopriv_kpct_search', [$this, 'handle_search']);
     }
 
     /**
-     * Only load assets when shortcode is found on the page
+     * AJAX handler for KG search
      */
-    public function maybe_enqueue_assets() {
+    public function handle_search() {
 
-        // If not singular page/post, skip
-        if (!is_singular()) return;
+        check_ajax_referer('kpct_nonce', 'nonce');
 
-        global $post;
-
-        if (!isset($post->post_content)) return;
-
-        // Check if shortcode exists in the content
-        if (has_shortcode($post->post_content, 'kp_claim_tool')) {
-
-            // CSS
-            wp_enqueue_style(
-                'kpct-frontend',
-                KPCT_URL . 'assets/css/kp-frontend.css',
-                [],
-                '1.0.0'
-            );
-
-            // JS
-            wp_enqueue_script(
-                'kpct-frontend',
-                KPCT_URL . 'assets/js/kp-frontend.js',
-                ['jquery'],
-                '1.0.0',
-                true
-            );
-
-            // Localize AJAX + settings
-            wp_localize_script('kpct-frontend', 'kpctData', [
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'nonce'   => wp_create_nonce('kpct_nonce'),
-            ]);
+        $query = isset($_POST['query']) ? sanitize_text_field($_POST['query']) : '';
+        if (empty($query)) {
+            wp_send_json_error(['message' => 'Missing search query']);
         }
+
+        $api_key = get_option($this->option_name);
+        if (empty($api_key)) {
+            wp_send_json_error(['message' => 'API key is not configured']);
+        }
+
+        // Build Google KG API URL
+        $url = 'https://kgsearch.googleapis.com/v1/entities:search?' . http_build_query([
+            'query' => $query,
+            'key'   => $api_key,
+            'limit' => 20,
+        ]);
+
+        $response = wp_remote_get($url);
+
+        if (is_wp_error($response)) {
+            wp_send_json_error(['message' => 'API request failed']);
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        $results = [];
+
+        if (!empty($data['itemListElement'])) {
+            foreach ($data['itemListElement'] as $item) {
+
+                $result = $item['result'];
+
+                $results[] = [
+                    'id'          => $result['@id'] ?? uniqid(),
+                    'name'        => $result['name'] ?? $query,
+                    'type'        => $result['@type'][0] ?? '',
+                    'description' => $result['description']
+                                    ?? ($result['detailedDescription']['articleBody'] ?? ''),
+                    'image'       => $result['image']['contentUrl']
+                                    ?? ($result['image']['url'] ?? ''),
+                    'url'         => $result['detailedDescription']['url']
+                                    ?? 'https://www.google.com/search?q=' . urlencode($query),
+                ];
+            }
+        }
+
+        wp_send_json_success($results);
     }
 }
