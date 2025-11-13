@@ -1,0 +1,2 @@
+<?php
+// Assets class placeholder
