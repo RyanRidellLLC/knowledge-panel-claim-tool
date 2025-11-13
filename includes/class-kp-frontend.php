@@ -1,0 +1,2 @@
+<?php
+// Frontend class placeholder
